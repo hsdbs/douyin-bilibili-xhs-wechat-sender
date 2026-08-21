@@ -1,0 +1,56 @@
+# ===== Python 缓存 / 编译产物 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ===== 虚拟环境（含项目自带与第三方工具自带） =====
+.venv/
+venv/
+env/
+tools/xhs/.venv/
+
+# ===== 构建产物（PyInstaller） =====
+build/
+dist/
+
+# ===== 日志 =====
+logs/
+wxauto_logs/
+*.log
+
+# ===== 运行时数据（含微信 wxid/群名映射、任务与去重记录） =====
+data/
+
+# ===== 下载的视频（运行时产出） =====
+videos/
+
+# ===== 敏感信息 / Cookie / 含真实 Token 的本地配置 =====
+douyin_cookie.txt
+config/config.json
+
+# ===== 临时目录 / 缓存 =====
+_tmp_cookies/
+_tmp_pyexecjs/
+
+# ===== 本地 uv 安装器（非项目代码） =====
+uv.zip
+uvbin/
+
+# ===== WorkBuddy 项目数据 =====
+.workbuddy/
+
+# ===== 本地测试 / 忽略用产物 =====
+@AutomationLog.txt
+发送测试_请忽略.txt
+测试视频_请忽略.mp4
+
+# ===== 编辑器 / 系统文件 =====
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== 第三方工具自带的仓库元数据（嵌套 .git） =====
+tools/xhs/.git/

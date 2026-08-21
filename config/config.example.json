@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "weflow": {
+    "base_url": "http://127.0.0.1:5031",
+    "token": "在此填写你的 WeFlow API Token"
+  },
+  "douyin": {
+    "enabled": true,
+    "parse_mode": "real",
+    "download_dir": "videos",
+    "max_retry": 3,
+    "retry_interval": 4
+  },
+  "bilibili": {
+    "enabled": true,
+    "download_dir": "videos",
+    "quality": 64,
+    "auth": "",
+    "yutto_path": "",
+    "ffmpeg_path": "",
+    "timeout": 600,
+    "max_retry": 2
+  },
+  "xhs": {
+    "enabled": true,
+    "download_dir": "videos",
+    "cookie": "",
+    "xhs_root": "",
+    "timeout": 10,
+    "max_retry": 3
+  },
+  "wechat": {
+    "group_whitelist": [],
+    "test_mode": false,
+    "delete_after_seconds": 180,
+    "quote_reply": true
+  },
+  "advanced": {
+    "port": 8765,
+    "listen_push": true,
+    "listen_poll": true,
+    "poll_interval": 3,
+    "lookback_limit": 10,
+    "active_window": 86400,
+    "log_level": "INFO",
+    "max_log_lines": 500,
+    "auto_open_browser": true
+  }
+}

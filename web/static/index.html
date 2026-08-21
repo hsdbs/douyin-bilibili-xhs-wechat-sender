@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抖音视频自动发送 · 管理面板</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="app">
+    <!-- ============ 侧栏 ============ -->
+    <aside class="sidebar">
+        <div class="logo">
+            <div class="logo-badge">🎬</div>
+            <span>抖音视频自动发送</span>
+        </div>
+        <nav id="nav">
+            <a data-page="dashboard" class="active"><span class="ico">📊</span><span>Dashboard</span></a>
+            <a data-page="config"><span class="ico">⚙️</span><span>配置中心</span></a>
+            <a data-page="tasks"><span class="ico">📋</span><span>任务记录</span></a>
+            <a data-page="logs"><span class="ico">📝</span><span>运行日志</span></a>
+            <a data-page="settings"><span class="ico">🔧</span><span>高级设置</span></a>
+            <a data-page="about"><span class="ico">ℹ️</span><span>关于</span></a>
+        </nav>
+        <div class="sidebar-footer">本地服务 · 仅 127.0.0.1<br>v1.0.0</div>
+    </aside>
+
+    <!-- ============ 主区 ============ -->
+    <main class="main">
+        <header class="topbar">
+            <h1 id="page-title">Dashboard</h1>
+            <div class="topbar-right">
+                <span id="service-pill" class="badge pending">● 监听未运行</span>
+                <button class="btn btn-ghost btn-sm" id="theme-toggle" title="切换深色/浅色主题">🌙 主题</button>
+            </div>
+        </header>
+
+        <div class="content">
+            <!-- ============ Dashboard ============ -->
+            <section id="page-dashboard" class="page active">
+                <div class="grid grid-4" id="status-grid">
+                    <!-- 由 JS 渲染状态卡片 -->
+                </div>
+
+                <div class="grid grid-4 mt-16" id="stats-grid">
+                    <!-- 由 JS 渲染统计卡片 -->
+                </div>
+
+                <div class="grid grid-2 mt-16">
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>服务控制</div>
+                        <div class="flex gap-8 mb-16">
+                            <button class="btn btn-success" id="btn-start">▶ 启动监听</button>
+                            <button class="btn btn-danger" id="btn-stop">■ 停止监听</button>
+                            <button class="btn btn-outline" id="btn-restart">↻ 重启监听</button>
+                        </div>
+                        <div class="flex gap-8">
+                            <span class="tag">当前状态：</span>
+                            <span id="service-state" class="badge pending">未运行</span>
+                            <span class="tag">启动时间：</span><span id="service-start" class="tag">—</span>
+                            <span class="tag">运行时长：</span><span id="service-uptime" class="tag">—</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>连接测试</div>
+                        <div class="flex gap-8 mb-8">
+                            <button class="btn btn-outline" id="test-weflow">测试 WeFlow</button>
+                            <button class="btn btn-outline" id="test-douyin">测试抖音</button>
+                            <button class="btn btn-outline" id="test-bilibili">测试 B站</button>
+                            <button class="btn btn-outline" id="test-xhs">测试小红书</button>
+                            <button class="btn btn-outline" id="test-wechat">测试微信</button>
+                        </div>
+                        <div id="test-result" class="help-box" style="display:none;"></div>
+                        <button class="btn btn-ghost btn-sm mt-16" id="btn-env-check">🔍 运行环境检查</button>
+                        <div id="env-result" class="mt-16" style="display:none;"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ 配置中心 ============ -->
+            <section id="page-config" class="page">
+                <div class="tabs" id="config-tabs">
+                    <div class="tab active" data-tab="weflow">WeFlow</div>
+                    <div class="tab" data-tab="wechat">微信</div>
+                    <div class="tab" data-tab="douyin">抖音</div>
+                    <div class="tab" data-tab="bilibili">B站</div>
+                    <div class="tab" data-tab="xhs">小红书</div>
+                </div>
+
+                <!-- WeFlow -->
+                <div class="config-panel" id="panel-weflow">
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>WeFlow 配置</div>
+                        <div class="form-group">
+                            <label class="form-label">WeFlow 地址</label>
+                            <input class="form-control" id="cfg-weflow-url" placeholder="http://127.0.0.1:5031">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">WeFlow Token <span class="hint">（敏感信息，默认隐藏）</span></label>
+                            <div class="pw-wrap">
+                                <input class="form-control" id="cfg-weflow-token" type="password" placeholder="留空表示不修改">
+                                <button class="pw-toggle" data-target="cfg-weflow-token" title="显示/隐藏">👁</button>
+                            </div>
+                        </div>
+                        <div class="flex gap-8">
+                            <button class="btn btn-primary" id="save-weflow">保存配置</button>
+                            <button class="btn btn-outline" id="test-weflow-2">测试连接</button>
+                        </div>
+                        <div class="help-box mt-16">
+                            💡 本工具支持「主动推送（SSE）+ 轮询」双模式监听。推送需在 WeFlow 开启：<code>设置 → API 服务 → 启动服务</code>并勾选「主动推送」；如未开启，可在「高级设置」里只保留轮询。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 微信 -->
+                <div class="config-panel" id="panel-wechat" style="display:none;">
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>微信发送配置</div>
+                        <div class="form-group">
+                            <label class="form-label">群聊白名单 <span class="hint">（每行一个群 wxid 或显示名；私聊无需配置，自动发给对方）</span></label>
+                            <textarea class="form-control" id="cfg-wechat-whitelist" rows="5" placeholder="56434999070@chatroom&#10;49041797708@chatroom"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <div class="switch-row">
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg-wechat-testmode">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">测试模式（所有发送统一发到「文件传输助手」）</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div class="switch-row">
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg-wechat-quote">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">引用对方消息发送（视频/图文会引用对方发来的那条链接）</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">发送后延迟删除（秒）<span class="hint">（0 或负数 = 永不自动删除）</span></label>
+                            <input class="form-control" id="cfg-wechat-delete" type="number">
+                        </div>
+                        <div class="flex gap-8">
+                            <button class="btn btn-primary" id="save-wechat">保存配置</button>
+                            <button class="btn btn-outline" id="test-wechat-2">测试微信</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 抖音 -->
+                <div class="config-panel" id="panel-douyin" style="display:none;">
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>抖音解析配置</div>
+                        <div class="form-group">
+                            <div class="switch-row">
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg-douyin-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">启用抖音解析</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">下载目录</label>
+                            <div class="input-group">
+                                <input class="form-control" id="cfg-douyin-dir" placeholder="选择保存目录">
+                                <button class="btn btn-outline" id="btn-select-douyin">📁 选择目录</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">解析模式</label>
+                            <select class="form-control" id="cfg-douyin-mode">
+                                <option value="real">真实解析（默认）</option>
+                                <option value="fake">测试视频占位（不联网）</option>
+                            </select>
+                        </div>
+                        <div class="flex gap-8">
+                            <button class="btn btn-primary" id="save-douyin">保存配置</button>
+                            <button class="btn btn-outline" id="test-douyin-2">测试抖音解析</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- B站 -->
+                <div class="config-panel" id="panel-bilibili" style="display:none;">
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>B站解析配置</div>
+                        <div class="form-group">
+                            <div class="switch-row">
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg-bili-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">启用 B站解析</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">下载目录</label>
+                            <div class="input-group">
+                                <input class="form-control" id="cfg-bili-dir" placeholder="选择保存目录">
+                                <button class="btn btn-outline" id="btn-select-bili">📁 选择目录</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">视频清晰度</label>
+                            <select class="form-control" id="cfg-bili-quality">
+                                <option value="16">360P 流畅</option>
+                                <option value="32">480P 标清</option>
+                                <option value="64">720P 高清（推荐）</option>
+                                <option value="80">1080P 全高清</option>
+                                <option value="112">1080P+</option>
+                                <option value="120">4K</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">登录 Cookie（SESSDATA）<span class="hint">（可选，下载高清/大会员内容需填）</span></label>
+                            <input class="form-control" id="cfg-bili-auth" placeholder="SESSDATA=...">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">yutto 可执行文件路径 <span class="hint">（留空自动探测）</span></label>
+                            <input class="form-control" id="cfg-bili-yutto" placeholder="例如 C:\Users\你\.local\bin\yutto.exe">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">FFmpeg 可执行文件路径 <span class="hint">（留空自动探测）</span></label>
+                            <input class="form-control" id="cfg-bili-ffmpeg" placeholder="例如 D:\tools\ffmpeg\ffmpeg.exe">
+                        </div>
+                        <div class="flex gap-8">
+                            <button class="btn btn-primary" id="save-bili">保存配置</button>
+                            <button class="btn btn-outline" id="test-bili-2">测试 B站解析</button>
+                        </div>
+                        <div class="help-box mt-16">
+                            💡 B站解析依赖 yutto（CLI 工具）与 FFmpeg。安装 yutto：<code>uv tool install yutto</code>；FFmpeg 可复用项目内置的 <code>tools/ffmpeg/ffmpeg.exe</code>。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 小红书 -->
+                <div class="config-panel" id="panel-xhs" style="display:none;">
+                    <div class="card">
+                        <div class="card-title"><span class="dot"></span>小红书解析配置</div>
+                        <div class="form-group">
+                            <div class="switch-row">
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg-xhs-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">启用小红书解析</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">下载目录</label>
+                            <div class="input-group">
+                                <input class="form-control" id="cfg-xhs-dir" placeholder="选择保存目录">
+                                <button class="btn btn-outline" id="btn-select-xhs">📁 选择目录</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">登录 Cookie <span class="hint">（可选；不填可下载基础清晰度视频与全部图文，填写可解锁高清）</span></label>
+                            <textarea class="form-control" id="cfg-xhs-cookie" rows="3" placeholder="粘贴小红书网页版 Cookie（web_session=...）"></textarea>
+                        </div>
+                        <div class="flex gap-8">
+                            <button class="btn btn-primary" id="save-xhs">保存配置</button>
+                            <button class="btn btn-outline" id="test-xhs-2">测试小红书解析</button>
+                        </div>
+                        <div class="help-box mt-16">
+                            💡 小红书解析基于 XHS-Downloader（已内置在 <code>tools/xhs/</code>），无需额外安装。Cookie 可选：不填也能下载基础清晰度视频和图文。
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ 任务记录 ============ -->
+            <section id="page-tasks" class="page">
+                <div class="card">
+                    <div class="flex-between mb-16">
+                        <div class="card-title" style="margin-bottom:0;"><span class="dot"></span>处理记录</div>
+                        <button class="btn btn-outline btn-sm" id="btn-clear-tasks">清空记录</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>时间</th><th>来源</th><th>链接</th><th>视频</th><th>状态</th><th>错误原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tasks-body">
+                                <tr><td colspan="6" class="empty-state">暂无处理记录</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ 运行日志 ============ -->
+            <section id="page-logs" class="page">
+                <div class="card">
+                    <div class="flex-between mb-16">
+                        <div class="card-title" style="margin-bottom:0;"><span class="dot"></span>运行日志</div>
+                        <div class="flex gap-8">
+                            <label class="switch">
+                                <input type="checkbox" id="log-autoscroll" checked>
+                                <span class="slider"></span>
+                            </label>
+                            <span class="tag">自动滚动</span>
+                            <button class="btn btn-outline btn-sm" id="btn-clear-logs">清空日志</button>
+                        </div>
+                    </div>
+                    <div class="log-container" id="log-box">
+                        <div class="log-empty">等待日志...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ 高级设置 ============ -->
+            <section id="page-settings" class="page">
+                <div class="card">
+                    <div class="card-title"><span class="dot"></span>高级设置 <span class="tag">（一般无需修改）</span></div>
+
+                    <div class="card-title" style="font-size:14px;"><span class="dot"></span>消息监听方式</div>
+                    <div class="form-group">
+                        <div class="switch-row">
+                            <label class="switch">
+                                <input type="checkbox" id="cfg-adv-push">
+                                <span class="slider"></span>
+                            </label>
+                            <span class="switch-label">启用主动推送（SSE，实时接收）</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="switch-row">
+                            <label class="switch">
+                                <input type="checkbox" id="cfg-adv-poll">
+                                <span class="slider"></span>
+                            </label>
+                            <span class="switch-label">启用轮询兜底（可监听到自己发送的消息）</span>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">轮询间隔（秒）</label>
+                            <input class="form-control" id="cfg-adv-pollint" type="number" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">每会话扫描消息数</label>
+                            <input class="form-control" id="cfg-adv-lookback" type="number" min="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">活跃会话窗口（秒）</label>
+                            <input class="form-control" id="cfg-adv-window" type="number" min="60">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Web 服务端口 <span class="hint">（修改后需重启程序生效）</span></label>
+                            <input class="form-control" id="cfg-adv-port" type="number" min="1" max="65535">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">日志等级</label>
+                            <select class="form-control" id="cfg-adv-loglevel">
+                                <option value="INFO">INFO（正常）</option>
+                                <option value="DEBUG">DEBUG（调试）</option>
+                                <option value="WARNING">WARNING（仅警告）</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">内存保留日志条数</label>
+                            <input class="form-control" id="cfg-adv-maxlog" type="number" min="50">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="switch-row">
+                            <label class="switch">
+                                <input type="checkbox" id="cfg-adv-browser">
+                                <span class="slider"></span>
+                            </label>
+                            <span class="switch-label">启动时自动打开浏览器</span>
+                        </div>
+                    </div>
+                    <div class="help-box mt-16">
+                        💡 推荐「主动推送 + 轮询兜底」同时开启：推送负责实时接收，轮询负责补漏（含自己发送的消息）。若 WeFlow 未开「主动推送」，可只保留轮询。
+                    </div>
+                    <button class="btn btn-primary" id="save-adv">保存高级设置</button>
+                </div>
+            </section>
+
+            <!-- ============ 关于 ============ -->
+            <section id="page-about" class="page">
+                <div class="card">
+                    <div class="card-title"><span class="dot"></span>关于</div>
+                    <p class="muted" style="line-height:1.8;">
+                        <b style="color:var(--text);">视频自动发送</b> v1.0.0<br>
+                        自动监听微信消息中的链接，解析抖音 / B站 / 小红书 视频与图文并发送给对应联系人的本地工具。
+                    </p>
+                </div>
+                <div class="card">
+                    <div class="card-title"><span class="dot"></span>使用步骤</div>
+                    <div class="help-box">
+                        <ul>
+                            <li>① 配置 WeFlow 地址与 Token，点击「测试连接」（使用主动推送需在 WeFlow 开启「主动推送」）</li>
+                            <li>② 确认微信已登录并运行</li>
+                            <li>③ 回到 Dashboard，点击「启动监听」</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-title"><span class="dot"></span>外部依赖</div>
+                    <div class="help-box warn">
+                        <ul>
+                            <li>✅ 微信（Weixin.exe）需已登录并保持运行</li>
+                            <li>✅ WeFlow 服务需已启动（主动推送监听需额外开启「主动推送」，轮询监听无需）</li>
+                            <li>✅ 抖音解析自动获取游客态 Cookie（无需手动填写）</li>
+                            <li>✅ B站解析依赖 yutto + FFmpeg（详见配置中心）</li>
+                            <li>✅ 小红书解析基于 XHS-Downloader（已内置，Cookie 可选）</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-title"><span class="dot"></span>数据安全</div>
+                    <p class="muted" style="line-height:1.8;">
+                        本服务仅监听 127.0.0.1，不对外网开放。<br>
+                        WeFlow Token 等敏感信息默认隐藏、脱敏返回、不写入普通日志。
+                    </p>
+                </div>
+            </section>
+        </div>
+    </main>
+</div>
+
+<div id="toast-container"></div>
+<script src="/js/app.js"></script>
+</body>
+</html>
