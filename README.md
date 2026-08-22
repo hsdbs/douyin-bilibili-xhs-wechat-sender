@@ -8,7 +8,7 @@
 
 1. 双击 `dist\抖音视频自动发送\抖音视频自动发送.exe`
 2. 程序自动启动本地服务并打开浏览器，进入管理面板
-3. 依次配置：WeFlow → 抖音 Cookie → 微信 → 测试连接 → 启动监听
+3. 依次配置：WeFlow → 微信 → 测试连接 → 启动监听（抖音解析使用程序内置游客态登录，无需提供 Cookie）
 
 > 注意：整个 `dist\抖音视频自动发送\` 文件夹都要保留（EXE 依赖同级 `_internal` 目录）。
 
@@ -26,7 +26,7 @@
 | 步骤 | 操作 |
 |------|------|
 | ① | 配置中心 → WeFlow：填地址与 Token，点「测试连接」 |
-| ② | 配置中心 → 抖音：填 Cookie，点「测试解析」 |
+| ② | 抖音：内置游客态登录，**无需配置 Cookie**（程序自动获取游客态凭证） |
 | ③ | 配置中心 → 微信：确认群白名单、测试模式；确认微信已登录运行 |
 | ④ | Dashboard → 点「启动监听」 |
 
@@ -84,11 +84,11 @@ uv pip install --python .venv\Scripts\python.exe pyinstaller
 
 - **微信**：需已安装并登录（Weixin.exe），发送靠 wxauto4 自动化
 - **WeFlow**：需已启动（默认 http://127.0.0.1:5031），并在「设置 → API 服务」中开启「主动推送」，用于实时推送微信消息
-- **抖音 Cookie**：需有效（网页版登录 Cookie，过期需重新获取）
+- **抖音解析**：使用程序内置游客态登录，**无需用户提供 Cookie**（无需额外配置）
 
 ## 七、安全说明
 
 - Web 服务仅监听 `127.0.0.1`，不对外网开放
-- WeFlow Token、抖音 Cookie 默认隐藏、API 脱敏返回、不写入普通日志
+- WeFlow Token 默认隐藏、API 脱敏返回、不写入普通日志；抖音使用内置游客态登录，无需 Cookie
 - 视频删除仅作用于「视频保存目录」内文件，不会误删其它文件
-- `config/config.json`（含真实 WeFlow Token 与微信群白名单）及 `douyin_cookie.txt` 已被 `.gitignore` 忽略，不会提交到仓库；请复制 `config/config.example.json` 为 `config.json` 后填写自己的 Token 与群白名单
+- `config/config.json`（含真实 WeFlow Token 与微信群白名单）及抖音运行时 Cookie（`douyin_cookie.txt`，游客态自动获取）已被 `.gitignore` 忽略，不会提交到仓库；请复制 `config/config.example.json` 为 `config.json` 后填写自己的 Token 与群白名单
