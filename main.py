@@ -922,13 +922,15 @@ def _process_command(target, display_name, title, rawid, processed, quote_key=No
     cfg = get_config()
     dl_dir = (cfg.get("ebook", {}) or {}).get("download_dir") or DOWNLOAD_DIR
     try:
-        kind, file_paths = novel_parser.resolve_book(title, dl_dir)
-    except novel_parser.BookNotFound as e:
-        logger.info(f"[电子书] 未找到「{title}」: {e}")
-        send_text(display_name, f"未找到《{title}》相关电子书资源", target)
-        tasks.update_task(task["id"], status="success", video="未找到（已回复提示）")
-        return
+        import ebook_engine
+        kind, file_paths = ebook_engine.resolve_book(title, dl_dir, prefer_format="epub")
     except Exception as e:
+        # 兼容自定义或标准未找到异常
+        if "未找到" in str(e) or e.__class__.__name__ == "BookNotFound":
+            logger.info(f"[电子书] 未找到「{title}」: {e}")
+            send_text(display_name, f"未找到《{title}》相关电子书资源", target)
+            tasks.update_task(task["id"], status="success", video="未找到（已回复提示）")
+            return
         logger.error(f"[电子书] 处理「{title}」异常: {e}")
         send_text(display_name, f"未找到《{title}》相关电子书资源", target)
         tasks.update_task(task["id"], status="failed", error=str(e)[:200])
@@ -938,8 +940,9 @@ def _process_command(target, display_name, title, rawid, processed, quote_key=No
     if sent:
         for p in file_paths:
             schedule_delete(p)  # 复用延迟删除（默认 180s）
+        ext = os.path.splitext(file_paths[0])[1].upper().lstrip(".")
         tasks.update_task(task["id"], status="success",
-                          video=f"[电子书] 《{title}》全本")
+                          video=f"[电子书] 《{title}》全本 ({ext})")
     else:
         tasks.update_task(task["id"], status="failed", error="发送失败")
 

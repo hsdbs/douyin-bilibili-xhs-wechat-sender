@@ -493,8 +493,8 @@ def _env_check():
     result.append({"name": "音乐解析(网易云/QQ)", "status": "ok" if ok else "error", "detail": detail})
 
     # 电子书引擎（小说 / 出版名著高速检索下载）
-    import novel_parser
-    ok, detail = novel_parser.test_novel()
+    import ebook_engine
+    ok, detail = ebook_engine.test_ebook_engine()
     result.append({"name": "电子书检索下载", "status": "ok" if ok else "error", "detail": detail})
 
     return {"items": result}
