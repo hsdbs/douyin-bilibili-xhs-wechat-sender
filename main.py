@@ -452,7 +452,7 @@ def _handle_push_event(data, processed):
     # 命令：电子书下载（支持自定义前缀或默认 ./下载 书名）
     book_title = _match_book_command(content)
     if book_title:
-        _enqueue_link(target, display_name, book_title, "wikisource", rawid)
+        _enqueue_link(target, display_name, book_title, "wikisource", rawid, content)
         return
 
     for platform, regex in PLATFORM_URL_RES:
@@ -512,7 +512,7 @@ def _scan_messages(processed, label="扫描"):
             # 命令：电子书下载（支持自定义前缀或默认 ./下载 书名）
             book_title = _match_book_command(content)
             if book_title:
-                found.append((target, display_name, book_title, "wikisource", key, None))
+                found.append((target, display_name, book_title, "wikisource", key, content))
                 continue
             for platform, regex in PLATFORM_URL_RES:
                 m = regex.search(content)
@@ -779,28 +779,26 @@ def _quote_key(url):
 
 
 def _quote_message(wx, url, quote_key=None):
-    """在目标会话里定位那条链接消息并右键引用。返回是否成功。
+    """在目标会话里定位那条消息并右键引用。返回是否成功。
 
-    quote_key 用于卡片消息：wxauto4 GetAllMessage 返回的卡片 content 是渲染后的
-    标题文本（type='link' 等），不含原始 URL，因此卡片改用标题(quote_key)匹配，
-    并放宽类型白名单接受 link/app/card 类消息。普通文本链接 quote_key 为 None，
-    仍用原有 URL 子串匹配。
+    - quote_key: 用于卡片标题或指令文本匹配（如 "./下载 某某书" 或卡片标题）。
+    - url: 链接或普通消息内容匹配。
     """
     try:
         msgs = wx.GetAllMessage()
     except Exception:
         return False
-    key = _quote_key(url)
-    # 允许的类型：文本/其它（原有）+ 卡片/链接类（appmsg 分享，type='link' 等）
+    key = _quote_key(url) if url else ""
+    # 允许的类型：文本/其它 + 卡片/链接类（appmsg 分享，type='link' 等）
     accept_types = ("text", "other", "link", "app", "card")
-    # 链接消息通常是会话里最新的一条，从后往前找更快命中
+    # 从后往前找更快命中最新的指令或分享
     for m in reversed(msgs):
         t = getattr(m, "type", None)
         if t not in accept_types:
             continue
         content = getattr(m, "content", "") or ""
-        # 卡片：用标题(quote_key)匹配（content 不含 URL）
-        if quote_key and t in ("link", "app", "card") and quote_key in content:
+        # 1. 优先使用 quote_key 精准/包含匹配（卡片标题或发送指令文本）
+        if quote_key and (quote_key in content or content in quote_key):
             try:
                 m.right_click()
                 time.sleep(0.15)
@@ -809,8 +807,8 @@ def _quote_message(wx, url, quote_key=None):
                 return True
             except Exception:
                 return False
-        # 文本链接：原有 URL 子串匹配
-        if t in ("text", "other") and (key in content or url in content):
+        # 2. 文本链接或 URL 匹配
+        if url and (key in content or url in content):
             try:
                 m.right_click()
                 time.sleep(0.15)
@@ -884,9 +882,9 @@ def send_files(display_name, file_paths, target_wxid, quote_url=None, quote_key=
     return True
 
 
-# ============ ./下载 命令处理（维基文库公有资源）============
-def send_text(display_name, text, target_wxid):
-    """发送纯文本消息（./下载 未命中时回复提示）。"""
+# ============ ./下载 命令处理（电子书聚合下载）============
+def send_text(display_name, text, target_wxid, quote_url=None, quote_key=None):
+    """发送纯文本消息（支持引用原消息回复）。"""
     _maximize_wechat()
     wx = _get_wechat()
     ok = switch_chat(wx, display_name)
@@ -897,6 +895,16 @@ def send_text(display_name, text, target_wxid):
     if not ok:
         logger.warning(f"[发送] 无法切换到 {display_name!r}，已中止文本发送（避免发错人）")
         return False
+
+    if quote_url or quote_key:
+        try:
+            if _quote_message(wx, quote_url or quote_key, quote_key):
+                logger.info(f"[引用] 已引用原消息: {quote_key or quote_url}")
+            else:
+                logger.warning(f"[引用] 未定位到原消息，改为直接发送文本")
+        except Exception as e:
+            logger.warning(f"[引用] 引用原消息失败: {e}")
+
     try:
         wx.SendMsg(text)
         logger.info(f"[发送] 已发送文本 -> {display_name} (wxid={target_wxid}): {text[:30]}")
@@ -928,15 +936,15 @@ def _process_command(target, display_name, title, rawid, processed, quote_key=No
         # 兼容自定义或标准未找到异常
         if "未找到" in str(e) or e.__class__.__name__ == "BookNotFound":
             logger.info(f"[电子书] 未找到「{title}」: {e}")
-            send_text(display_name, f"未找到《{title}》相关电子书资源", target)
+            send_text(display_name, f"未找到《{title}》相关电子书资源", target, quote_url=quote_key, quote_key=quote_key)
             tasks.update_task(task["id"], status="success", video="未找到（已回复提示）")
             return
         logger.error(f"[电子书] 处理「{title}」异常: {e}")
-        send_text(display_name, f"未找到《{title}》相关电子书资源", target)
+        send_text(display_name, f"未找到《{title}》相关电子书资源", target, quote_url=quote_key, quote_key=quote_key)
         tasks.update_task(task["id"], status="failed", error=str(e)[:200])
         return
 
-    sent = send_files(display_name, file_paths, target, None, quote_key)
+    sent = send_files(display_name, file_paths, target, quote_url=quote_key, quote_key=quote_key)
     if sent:
         for p in file_paths:
             schedule_delete(p)  # 复用延迟删除（默认 180s）
