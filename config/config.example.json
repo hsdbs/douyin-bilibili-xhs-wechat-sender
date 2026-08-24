@@ -29,6 +29,26 @@
     "timeout": 10,
     "max_retry": 3
   },
+  "netease": {
+    "enabled": true,
+    "download_dir": "videos",
+    "cookie": "",
+    "source": "auto",
+    "quality": "exhigh",
+    "api_base": "https://nextmusic.toubiec.cn"
+  },
+  "qqmusic": {
+    "enabled": true,
+    "download_dir": "videos",
+    "cookie": ""
+  },
+  "ebook": {
+    "enabled": true,
+    "download_dir": "videos",
+    "command_prefix": "./下载",
+    "search_source": "auto",
+    "auto_convert_txt": true
+  },
   "wechat": {
     "group_whitelist": [],
     "test_mode": false,
