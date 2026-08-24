@@ -1,251 +1,207 @@
 # -*- coding: utf-8 -*-
 """
-B站视频解析 + 下载模块
+Bilibili 视频解析与下载模块（基于 yutto CLI / Python API）。
 
-基于 yutto（yutto-dev/yutto，CLI 工具）子进程调用：
-  分享链接 → subprocess 调用 `yutto <url>` → 下载并 FFmpeg 混流为 mp4。
-
-依赖：
-  - yutto（建议 `uv tool install yutto`，或 pip 安装后保证 `yutto` 在 PATH）
-  - FFmpeg（yutto 混流必需；项目已内置 tools/ffmpeg/ffmpeg.exe，可自动探测）
-
-配置（config/config.json 的 bilibili 段）：
-  - yutto_path / ffmpeg_path：可执行文件路径，留空自动探测
-  - quality：清晰度（16=360P 32=480P 64=720P 80=1080P，默认 64）
-  - auth：B站 SESSDATA cookie（可选，高清/大会员需；留空游客态）
-  - download_dir：下载目录（默认与抖音共用 videos/）
-  - timeout：下载超时秒数
-
-注意：yutto 是纯 CLI，本模块通过 subprocess 调用，下载到临时目录后把 mp4 移入正式目录。
+说明：
+  - 依赖 yutto（已加入 requirements.txt，安装后提供 yutto 命令行）。
+  - B站无登录态默认只能下载 360P/480P，若需高清可在配置中填入 SESSDATA。
+  - yutto 自动调用 ffmpeg 合并音视频流（已在 tools/ffmpeg 提供兜底）。
 """
 import glob
-import logging
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
-from core.config import get_config, VIDEO_DIR, BASE_DIR
-
-# 静音 yutto 底层日志（如 httpx 噪音，虽然子进程独立，这里主要保证本进程干净）
-logging.getLogger("httpx").setLevel(logging.CRITICAL)
-
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+from core.config import get_config
+from core.logger import logger
 
 
 def _cfg(key, default=None):
-    try:
-        return get_config().get("bilibili", {}).get(key, default)
-    except Exception:
-        return default
-
-
-def _download_dir():
-    d = _cfg("download_dir") or ""
-    if d:
-        return d
-    return VIDEO_DIR
-
-
-def _quality():
-    try:
-        return int(_cfg("quality", 64))
-    except Exception:
-        return 64
+    b = get_config().get("bilibili", {})
+    return b.get(key, default)
 
 
 def _timeout():
-    try:
-        return int(_cfg("timeout", 600))
-    except Exception:
-        return 600
-
-
-def _max_retry():
-    try:
-        return int(_cfg("max_retry", 2))
-    except Exception:
-        return 2
+    return int(_cfg("timeout", 180))
 
 
 def _auth():
+    """读取用户配置的 SESSDATA（纯字符串或 SESSDATA=xxx 均可）。"""
+    sess = (_cfg("sessdata") or "").strip()
+    if sess:
+        if sess.startswith("SESSDATA="):
+            return sess
+        return f"SESSDATA={sess}"
     return (_cfg("auth") or "").strip()
-
-
-def _proxy():
-    """yutto 代理策略：默认 'no'（直连，避免系统代理把 api.bilibili.com 路由到失效上游导致握手超时）。
-    可选值：'no'=不走代理 / 'auto'=系统代理 / 具体代理地址。
-    实测本机系统代理(127.0.0.1:7892)会导致 api.bilibili.com TLS 握手超时，故默认关闭。"""
-    p = (_cfg("proxy") or "").strip()
-    return p or "no"
 
 
 def _yutto_bin():
     """探测 yutto 可执行文件路径。配置优先 → PATH → 常见安装位置。"""
     configured = _cfg("yutto_path") or ""
-    if configured and os.path.isfile(configured):
+    if configured and os.path.exists(configured):
         return configured
-    p = shutil.which("yutto")
-    if p:
-        return p
-    home = os.path.expanduser("~")
-    for cand in (
-        os.path.join(home, ".local", "bin", "yutto.exe"),
-        os.path.join(home, ".local", "bin", "yutto"),
-    ):
-        if os.path.isfile(cand):
-            return cand
-    return "yutto"  # 回退：寄希望于 PATH 上有
 
+    which = shutil.which("yutto")
+    if which:
+        return which
 
-def _ffmpeg_bin():
-    """探测 FFmpeg 可执行文件路径。配置优先 → PATH → 项目内置 tools/ffmpeg。"""
-    configured = _cfg("ffmpeg_path") or ""
-    if configured and os.path.isfile(configured):
-        return configured
-    p = shutil.which("ffmpeg")
-    if p:
-        return p
-    cand = os.path.join(BASE_DIR, "tools", "ffmpeg", "ffmpeg.exe")
-    if os.path.isfile(cand):
-        return cand
+    # Windows 常见 Python Scripts 目录
+    candidates = [
+        os.path.join(sys.prefix, "Scripts", "yutto.exe"),
+        os.path.join(sys.prefix, "bin", "yutto"),
+        os.path.expanduser(r"~\AppData\Local\Programs\Python\Python312\Scripts\yutto.exe"),
+        os.path.expanduser(r"~\AppData\Local\Programs\Python\Python311\Scripts\yutto.exe"),
+        os.path.expanduser(r"~\AppData\Local\Programs\Python\Python310\Scripts\yutto.exe"),
+        os.path.expanduser(r"~\AppData\Roaming\Python\Python312\Scripts\yutto.exe"),
+        r"E:\py\Scripts\yutto.exe",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
     return None
 
 
-def _build_env():
-    """构造子进程环境变量，把 FFmpeg 所在目录加进 PATH，并强制 UTF-8 输出。"""
-    env = os.environ.copy()
-    ffmpeg = _ffmpeg_bin()
-    if ffmpeg:
-        d = os.path.dirname(ffmpeg)
-        env["PATH"] = d + os.pathsep + env.get("PATH", "")
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUTF8"] = "1"
-    return env
+def _ffmpeg_dir():
+    """探测 ffmpeg 所在目录，以便将其加到子进程 PATH。"""
+    which = shutil.which("ffmpeg")
+    if which:
+        return os.path.dirname(os.path.abspath(which))
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "ffmpeg")
+    if os.path.exists(os.path.join(bundled, "ffmpeg.exe")) or os.path.exists(os.path.join(bundled, "ffmpeg")):
+        return bundled
+    return None
+
+
+def _clean_dir(d):
+    try:
+        shutil.rmtree(d, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _find_media(directory):
+    """在目录下递归搜索生成的视频文件（mp4/mkv/flv 等），按修改时间倒序。"""
+    exts = ("*.mp4", "*.mkv", "*.flv", "*.mov", "*.webm")
+    found = []
+    for ext in exts:
+        found.extend(glob.glob(os.path.join(directory, "**", ext), recursive=True))
+    found = [p for p in found if os.path.isfile(p) and os.path.getsize(p) > 1024]
+    found.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return found
 
 
 def _run_yutto(url, tmpdir):
-    """调用 yutto 下载到 tmpdir，返回 (returncode, stdout, stderr)。"""
+    """调用 yutto CLI 下载单个视频。返回最终视频绝对路径或抛异常。"""
+    bin_path = _yutto_bin()
+    if not bin_path:
+        raise RuntimeError("未找到 yutto。请执行 pip install yutto，或在配置中指定 yutto_path。")
+
     cmd = [
-        _yutto_bin(),
+        bin_path,
         url,
         "-d", tmpdir,
-        "-q", str(_quality()),
         "--no-danmaku",
         "--no-subtitle",
-        "--no-cover",
-        "--output-format", "mp4",
-        "--no-progress",
         "--no-color",
     ]
+
     auth = _auth()
     if auth:
         cmd += ["--auth", auth]
 
-    # 代理策略：默认关闭系统代理（避免 api.bilibili.com 握手超时）
-    cmd += ["--proxy", _proxy()]
-
     kwargs = dict(
         capture_output=True,
         timeout=_timeout(),
-        env=_build_env(),
     )
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    # Windows 隐藏命令行黑框
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        kwargs["startupinfo"] = si
 
-    logging.info("执行 yutto: %s", " ".join(cmd[:4]) + " ...")
-    r = subprocess.run(cmd, **kwargs)
-    stdout = (r.stdout or b"").decode("utf-8", "replace")
-    stderr = (r.stderr or b"").decode("utf-8", "replace")
-    return r.returncode, stdout, stderr
+    # 注入 ffmpeg 路径到子进程 PATH
+    env = os.environ.copy()
+    ff = _ffmpeg_dir()
+    if ff:
+        env["PATH"] = ff + os.pathsep + env.get("PATH", "")
+    kwargs["env"] = env
 
+    logger.info(f"[B站] 执行 yutto 下载: {url}")
+    try:
+        proc = subprocess.run(cmd, **kwargs)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"B站视频下载超时（超过 {_timeout()} 秒）")
+    except Exception as e:
+        raise RuntimeError(f"调用 yutto 失败: {e}")
 
-def _find_mp4(tmpdir):
-    """在临时目录里找 yutto 产出的 mp4 文件，返回第一个匹配的完整路径或 None。"""
-    for p in sorted(glob.glob(os.path.join(tmpdir, "*.mp4"))):
-        if os.path.isfile(p) and os.path.getsize(p) > 1000:
-            return p
-    return None
+    stdout = (proc.stdout or b"").decode("utf-8", errors="ignore")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="ignore")
 
+    if proc.returncode != 0:
+        msg = (stderr or stdout).strip()
+        logger.error(f"[B站] yutto 失败 (code={proc.returncode}):\n{msg}")
+        raise RuntimeError(f"B站下载失败: {msg[-300:] if msg else '未知错误'}")
 
-def _sanitize(name):
-    for ch in '\\/:*?"<>|':
-        name = name.replace(ch, "_")
-    name = name.strip()
-    return name or "bilibili"
+    medias = _find_media(tmpdir)
+    if not medias:
+        logger.error(f"[B站] yutto 执行成功但未找到产出视频。输出：\n{stdout}\n{stderr}")
+        raise RuntimeError("B站解析完成但未生成视频文件")
+
+    return medias[0]
 
 
 def resolve_bilibili(url):
-    """统一同步入口：解析 B站视频链接并下载，返回 ("video", [mp4_path])。"""
-    download_dir = _download_dir()
-    os.makedirs(download_dir, exist_ok=True)
-    max_retry = _max_retry()
-    last_err = None
+    """
+    对外主入口：解析并下载 B站 视频。
+    返回: ("video", [video_file_path])
+    异常: RuntimeError（带用户可读原因）
+    """
+    cfg = get_config()
+    b_cfg = cfg.get("bilibili", {})
+    if not b_cfg.get("enabled", True):
+        raise RuntimeError("B站解析功能已被用户禁用")
 
-    for attempt in range(max_retry):
-        tmpdir = tempfile.mkdtemp(prefix="bili_")
-        try:
-            code, stdout, stderr = _run_yutto(url, tmpdir)
-            mp4 = _find_mp4(tmpdir)
-            if not mp4:
-                tail = (stderr or stdout).strip().splitlines()
-                detail = tail[-1][:200] if tail else f"exit code {code}"
-                raise RuntimeError(f"yutto 下载失败（未产出 mp4）：{detail}")
+    dl_dir = b_cfg.get("download_dir") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "videos"
+    )
+    os.makedirs(dl_dir, exist_ok=True)
 
-            # 移入正式目录（沿用 yutto 的标题文件名，过长则截断）
-            name = os.path.basename(mp4)
-            if len(name) > 120:
-                name = name[:90] + os.path.splitext(name)[1]
-            dest = os.path.join(download_dir, name)
-            # 目标已存在则换名
-            if os.path.exists(dest):
-                stem, ext = os.path.splitext(name)
-                dest = os.path.join(download_dir, f"{stem}_{int(time.time())}{ext}")
-            shutil.move(mp4, dest)
-            logging.info("B站视频下载完成: %s", dest)
-            return "video", [dest]
-        except Exception as e:
-            last_err = e
-            if attempt < max_retry - 1:
-                logging.warning("B站解析第 %d 次失败: %s", attempt + 1, e)
-                time.sleep(2)
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+    tmpdir = tempfile.mkdtemp(prefix="bili_", dir=dl_dir)
+    try:
+        tmp_video = _run_yutto(url, tmpdir)
+        filename = os.path.basename(tmp_video)
+        final_path = os.path.join(dl_dir, filename)
 
-    raise last_err
+        # 若同名文件存在则覆盖，避免移动失败
+        if os.path.exists(final_path):
+            try:
+                os.remove(final_path)
+            except Exception:
+                pass
+        shutil.move(tmp_video, final_path)
+        logger.info(f"[B站] 视频已就绪: {final_path} ({os.path.getsize(final_path)} bytes)")
+        return "video", [final_path]
+    finally:
+        _clean_dir(tmpdir)
 
 
 def test_bilibili():
-    """测试 B站解析环境：yutto / FFmpeg 是否可用。返回 (ok, detail)。"""
-    yutto = _yutto_bin()
-    if yutto == "yutto" and not shutil.which("yutto"):
-        return False, "未找到 yutto 可执行文件（请安装 yutto 或在配置里指定路径）"
-    ffmpeg = _ffmpeg_bin()
-    if not ffmpeg:
-        return False, "未找到 FFmpeg（yutto 混流必需，请在配置里指定路径）"
+    """环境自检：yutto 与 ffmpeg 是否就绪。返回 (ok, detail_message)。"""
+    bin_path = _yutto_bin()
+    if not bin_path:
+        return False, "未找到 yutto（请在 Python 环境中执行 pip install yutto）"
+    ff = _ffmpeg_dir()
+    ff_ok = bool(ff)
 
-    # 轻量验证 yutto 能跑起来（--help 退出码非 0 属正常，只看是否有输出）
+    # 尝试读取 yutto 版本
     try:
-        kwargs = dict(capture_output=True, timeout=30, env=_build_env())
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        r = subprocess.run([yutto, "--version"], **kwargs)
-        out = (r.stdout or r.stderr or b"").decode("utf-8", "replace").strip()
-        if out:
-            return True, f"yutto 就绪（{out.splitlines()[0][:60]}），FFmpeg 可用"
-        return True, f"yutto 可执行，FFmpeg 可用（{os.path.basename(ffmpeg)}）"
+        proc = subprocess.run([bin_path, "--version"], capture_output=True, timeout=5)
+        ver = proc.stdout.decode("utf-8", errors="ignore").strip() or "已就绪"
     except Exception as e:
-        return False, f"yutto 运行异常: {str(e)[:160]}"
+        ver = f"探测异常: {e}"
 
-
-if __name__ == "__main__":
-    import sys as _sys
-    url = _sys.argv[1] if len(_sys.argv) > 1 else None
-    if not url:
-        print("用法: python bilibili_parser.py <bilibili视频链接>")
-        _sys.exit(1)
-    kind, paths = resolve_bilibili(url)
-    print("下载完成:", kind, paths, "| 大小:", os.path.getsize(paths[0]), "字节")
+    if not ff_ok:
+        return False, f"找到 yutto ({ver})，但未找到 FFmpeg（视频合并将失败）"
+    return True, f"yutto 可用（{ver}），FFmpeg 已就绪"

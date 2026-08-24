@@ -1,304 +1,257 @@
 # -*- coding: utf-8 -*-
 """
-统一配置管理模块。
+配置加载、保存与校验模块。
 
-- 配置文件：config/config.json（JSON，UTF-8）
-- 首次运行自动创建默认配置，并从旧数据自动迁移（根目录 JSON 数据文件）
-- 敏感字段（WeFlow Token）在 API 输出时脱敏，不写入普通日志
-- 线程安全（RLock）
+配置文件路径优先级：
+  1. 当前工作目录下的 config/config.json
+  2. 项目根目录下的 config/config.json
+  3. 若均不存在，基于 config/config.example.json 自动创建一份初始配置
+
+本模块保证线程安全，并在写入时使用原子重命名避免文件损坏。
 """
-import copy
 import json
 import os
-import sys
+import shutil
 import threading
+from core.logger import logger
 
-# ============ 目录 ============
-# 打包（PyInstaller frozen）时：可写数据（config/data/logs/videos）放在 exe 同级目录，
-# 只读静态资源从 _internal（sys._MEIPASS）读取。
-if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
-    STATIC_DIR = os.path.join(getattr(sys, "_MEIPASS", BASE_DIR), "web", "static")
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录
-    STATIC_DIR = os.path.join(BASE_DIR, "web", "static")
+_CONFIG_LOCK = threading.Lock()
+_CONFIG_CACHE = None
 
-CONFIG_DIR = os.path.join(BASE_DIR, "config")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-DATA_DIR = os.path.join(BASE_DIR, "data")
-LOG_DIR = os.path.join(BASE_DIR, "logs")
-VIDEO_DIR = os.path.join(BASE_DIR, "videos")
-
-# 旧数据文件（迁移用）
-LEGACY_DATA_FILES = {
-    "processed_rawids.json": os.path.join(BASE_DIR, "processed_rawids.json"),
-    "processed_msgs.json": os.path.join(BASE_DIR, "processed_msgs.json"),
-    "pending_deletions.json": os.path.join(BASE_DIR, "pending_deletions.json"),
-    "wxid_displayname_mapping.json": os.path.join(BASE_DIR, "wxid_displayname_mapping.json"),
-}
-
-# 敏感字段
-SENSITIVE_KEYS = ("token",)
-MASK = "******"
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_DIR = os.path.join(ROOT_DIR, "config")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+EXAMPLE_PATH = os.path.join(CONFIG_DIR, "config.example.json")
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+VIDEO_DIR = os.path.join(ROOT_DIR, "videos")
 
 
-# ============ 默认配置 ============
 def _default_config():
+    """当 example 也不存在时的兜底默认值。"""
     return {
-        "version": 1,
         "weflow": {
-            "base_url": "http://127.0.0.1:5031",
-            "token": "wf_douyin_flow_2026",
+            "api_base": "http://127.0.0.1:8765",
+            "token": "",
+            "poll_interval": 3,
+            "mode": "poll",
+            "weflow_enabled": False,
         },
         "douyin": {
-            "enabled": True,                # 平台开关（关闭后不识别抖音链接）
-            "parse_mode": "real",           # "real"=真实解析 | "fake"=测试视频占位
+            "enabled": True,
             "download_dir": VIDEO_DIR,
+            "cookie": "",
+            "max_video_mb": 100,
+            "timeout": 60,
             "max_retry": 3,
-            "retry_interval": 4,
         },
         "bilibili": {
-            "enabled": True,                # 平台开关（关闭后不识别 B站链接）
+            "enabled": True,
             "download_dir": VIDEO_DIR,
-            "quality": 64,                  # yutto 清晰度：16=360P 32=480P 64=720P 80=1080P
-            "auth": "",                     # B站 SESSDATA cookie（可选，高清/大会员需）
-            "yutto_path": "",               # yutto 可执行文件路径（留空自动探测）
-            "ffmpeg_path": "",              # ffmpeg 可执行文件路径（留空自动探测）
-            "timeout": 600,                 # 下载超时（秒）
-            "max_retry": 2,
-        },
-        "xhs": {
-            "enabled": True,                # 平台开关（关闭后不识别小红书链接）
-            "download_dir": VIDEO_DIR,
-            "cookie": "",                   # 小红书 cookie（可选，视频高清需）
-            "xhs_root": "",                 # XHS-Downloader 源码根目录（留空用内置 tools/xhs）
-            "timeout": 10,
+            "sessdata": "",
+            "auth": "",
+            "yutto_path": "",
+            "timeout": 180,
             "max_retry": 3,
         },
-        "netease": {
-            "enabled": True,                # 平台开关（关闭后不识别网易云链接）
+        "xhs": {
+            "enabled": True,
             "download_dir": VIDEO_DIR,
-            "cookie": "",                   # 网易云网页版 Cookie（可选，VIP/付费歌曲需）
-            "source": "auto",               # 解析源: auto=API优先+yt-dlp兜底 | api=仅API | ytdlp=仅yt-dlp
-            "quality": "exhigh",            # API 音质: standard/higher/exhigh/lossless/hires/sky...
-            "api_base": "https://nextmusic.toubiec.cn",  # NetEase 解析 API 地址（可自托管）
-        },
-        "qqmusic": {
-            "enabled": True,                # 平台开关（关闭后不识别QQ音乐链接）
-            "download_dir": VIDEO_DIR,
-            "cookie": "",                   # QQ音乐网页版 Cookie（可选，多数歌曲需登录才能下）
-        },
-        "ebook": {
-            "enabled": True,                # 平台开关（关闭后不识别电子书下载指令）
-            "download_dir": VIDEO_DIR,      # 电子书下载目录
-            "command_prefix": "./下载",     # 触发指令前缀（默认 "./下载"，支持自定义如 "下载"、"#下载" 等）
-            "search_source": "auto",        # 检索源: auto=智能优选 | ixdzs=爱下电子书
-            "auto_convert_txt": True,       # 自动解压并转换为标准 UTF-8 .txt 电子书
+            "cookie": "",
+            "max_video_mb": 100,
+            "timeout": 60,
+            "max_retry": 3,
         },
         "wechat": {
             "group_whitelist": [],          # 默认空：首次运行不向任何群发送，需在 Web 面板配置
             "test_mode": False,             # True=所有发送发到文件传输助手
-            "delete_after_seconds": 180,    # 发送后延迟删除秒数；<=0 永不删除
-            "quote_reply": True,            # True=发送视频/图文时引用对方消息
+            "enable_friends": False,        # 是否允许私聊转发
+            "file_transfer_fallback": False,# 发送失败时是否兜底发给文件传输助手
+            "quote_reply": True,            # 发送时是否引用原消息
+            "quote_keywords": ["抖音", "douyin", "v.douyin.com", "iesdouyin.com"],
+            "quote_timeout": 300,
+            "delete_after_send": True,      # 发送成功后是否延迟删除视频
+            "delete_delay": 180,            # 延迟删除秒数（默认 180 秒 = 3 分钟）
+            "send_delay": 1.0,              # 发送成功后等待秒数，避免触发微信频控
         },
         "advanced": {
             "port": 8765,
-            "listen_push": True,            # 启用 WeFlow 主动推送（SSE，实时）
-            "listen_poll": True,            # 启用轮询兜底（可监听到自己发送的消息）
-            "poll_interval": 3,             # 轮询间隔（秒）
-            "lookback_limit": 10,           # 每会话扫描最近消息条数
-            "active_window": 86400,         # 只看最近 N 秒内有消息的会话
-            "log_level": "INFO",
-            "max_log_lines": 500,
             "auto_open_browser": True,
+            "debug": False,
+            "poll_interval": 3,
         },
     }
 
 
-_lock = threading.RLock()
-_config = None
+def ensure_directories():
+    """确保运行时所需目录存在。"""
+    for d in (CONFIG_DIR, DATA_DIR, VIDEO_DIR):
+        os.makedirs(d, exist_ok=True)
 
 
-def _merge_defaults(cfg):
-    """把旧版配置合并进默认结构，保证缺少的字段有默认值（向前兼容）。"""
-    base = _default_config()
-    for section, default in base.items():
-        if section not in cfg:
-            cfg[section] = default
-        elif isinstance(default, dict) and isinstance(cfg[section], dict):
-            for k, v in default.items():
-                if k not in cfg[section]:
-                    cfg[section][k] = v
-    return cfg
-
-
-def _migrate_legacy(cfg):
-    """首次运行：从旧项目文件自动迁移数据（不要求用户手动复制）。"""
-    changed = False
-
-    # 迁移根目录数据文件到 data/
-    os.makedirs(DATA_DIR, exist_ok=True)
-    for name, src in LEGACY_DATA_FILES.items():
-        dst = os.path.join(DATA_DIR, name)
-        if os.path.exists(src) and not os.path.exists(dst):
+def init_config():
+    """首次运行时，若 config.json 不存在，从 example 复制或生成默认配置。"""
+    ensure_directories()
+    if not os.path.exists(CONFIG_PATH):
+        if os.path.exists(EXAMPLE_PATH):
             try:
-                os.replace(src, dst)
-                changed = True
-            except Exception:
-                pass
-
-    return changed
-
-
-def load_config():
-    """加载配置（进程内缓存）。首次运行自动创建默认配置并写入磁盘。"""
-    global _config
-    with _lock:
-        if _config is not None:
-            return _config
-        cfg = None
-        existed = os.path.exists(CONFIG_FILE)
-        if existed:
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    cfg = json.load(f)
-            except Exception:
-                cfg = None
-        if cfg is None:
-            cfg = _default_config()
-        cfg = _merge_defaults(cfg)
-        _migrate_legacy(cfg)
-        _config = cfg
-        # 保证目录存在
-        for d in (CONFIG_DIR, DATA_DIR, LOG_DIR, VIDEO_DIR):
-            try:
-                os.makedirs(d, exist_ok=True)
-            except Exception:
-                pass
-        if not existed:
-            save_config(cfg)   # 首次运行：把默认配置（含迁移的数据）写入磁盘
-        return cfg
+                shutil.copyfile(EXAMPLE_PATH, CONFIG_PATH)
+                logger.info(f"[配置] 已从 {EXAMPLE_PATH} 初始化 {CONFIG_PATH}")
+                return
+            except Exception as e:
+                logger.warning(f"[配置] 复制 example 配置失败: {e}，将使用内置默认配置")
+        # 兜底写入默认配置
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(_default_config(), f, ensure_ascii=False, indent=2)
+            logger.info(f"[配置] 已生成默认配置文件: {CONFIG_PATH}")
+        except Exception as e:
+            logger.error(f"[配置] 创建默认配置文件失败: {e}")
 
 
-def get_config():
-    """获取当前配置 dict（直接返回内部引用，调用方不得擅自修改）。"""
-    if _config is None:
-        load_config()
-    return _config
+def _deep_merge(base, override):
+    """递归合并字典，以 override 为准，保留 base 中新增的默认键。"""
+    merged = dict(base)
+    for k, v in override.items():
+        if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
+            merged[k] = _deep_merge(merged[k], v)
+        else:
+            merged[k] = v
+    return merged
 
 
-def reload_config():
-    """强制重新从磁盘加载（丢弃缓存）。"""
-    global _config
-    with _lock:
-        _config = None
-    return load_config()
-
-
-def save_config(cfg):
-    """保存配置到磁盘并刷新缓存。"""
-    global _config
-    with _lock:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        tmp = CONFIG_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, CONFIG_FILE)
-        _config = cfg
-
-
-def update_config(partial):
-    """用前端提交的部分字段更新配置（浅层按 section 合并），返回新配置。
-
-    partial 形如 {"weflow": {"token": "..."}, "advanced": {"port": 8765}}。
-    敏感字段为空字符串表示"保持原值不修改"。
+def get_config(reload=False):
     """
-    cfg = copy.deepcopy(get_config())
-    for section, fields in (partial or {}).items():
-        if section not in cfg:
-            cfg[section] = {}
-        if not isinstance(fields, dict):
-            continue
-        for k, v in fields.items():
-            if k in SENSITIVE_KEYS and (v is None or (isinstance(v, str) and not v.strip())):
-                continue  # 空值=不修改敏感字段
-            cfg[section][k] = v
-    # 类型校正：数值字段
-    _coerce_types(cfg)
-    save_config(cfg)
-    return cfg
+    获取全局配置字典（线程安全）。
+    若配置文件尚未创建，会自动初始化；读取后合并默认值保证字段完整。
+    """
+    global _CONFIG_CACHE
+    with _CONFIG_LOCK:
+        if _CONFIG_CACHE is not None and not reload:
+            return _CONFIG_CACHE
+
+        init_config()
+        cfg = _default_config()
+
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    user_cfg = json.load(f)
+                if isinstance(user_cfg, dict):
+                    cfg = _deep_merge(cfg, user_cfg)
+            except Exception as e:
+                logger.error(f"[配置] 读取 {CONFIG_PATH} 失败: {e}，使用默认配置")
+
+        _coerce_types(cfg)
+        _CONFIG_CACHE = cfg
+        return _CONFIG_CACHE
+
+
+def save_config(new_cfg):
+    """
+    保存配置到 config.json（原子写入 + 刷新内存缓存）。
+    返回 (ok: bool, message: str)
+    """
+    global _CONFIG_CACHE
+    if not isinstance(new_cfg, dict):
+        return False, "配置必须是 JSON 对象"
+
+    ensure_directories()
+    with _CONFIG_LOCK:
+        # 合并当前默认值保证结构完整
+        merged = _deep_merge(_default_config(), new_cfg)
+        _coerce_types(merged)
+
+        tmp_path = CONFIG_PATH + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(merged, f, ensure_ascii=False, indent=2)
+            # 原子重命名（Windows 上若目标存在可能报错，先尝试 replace）
+            if os.path.exists(CONFIG_PATH):
+                os.replace(tmp_path, CONFIG_PATH)
+            else:
+                os.rename(tmp_path, CONFIG_PATH)
+            _CONFIG_CACHE = merged
+            logger.info("[配置] 配置已成功保存并重新加载")
+            return True, "配置保存成功"
+        except Exception as e:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+            logger.error(f"[配置] 保存配置失败: {e}")
+            return False, f"保存失败: {e}"
 
 
 def _coerce_types(cfg):
-    """把前端字符串数字转回正确类型，容错处理。"""
-    def _num(v, default):
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return default
+    """防御性类型转换，避免前端传入字符串数字导致下游异常。"""
     adv = cfg.get("advanced", {})
-    adv["port"] = _num(adv.get("port"), 8765)
-    adv["listen_push"] = bool(adv.get("listen_push", True))
-    adv["listen_poll"] = bool(adv.get("listen_poll", True))
-    adv["poll_interval"] = _num(adv.get("poll_interval"), 3)
-    adv["lookback_limit"] = _num(adv.get("lookback_limit"), 10)
-    adv["active_window"] = _num(adv.get("active_window"), 86400)
-    adv["max_log_lines"] = _num(adv.get("max_log_lines"), 500)
-    adv["auto_open_browser"] = bool(adv.get("auto_open_browser"))
+    adv["port"] = int(adv.get("port", 8765))
+    adv["auto_open_browser"] = bool(adv.get("auto_open_browser", True))
+    adv["debug"] = bool(adv.get("debug", False))
+    adv["poll_interval"] = max(1, int(adv.get("poll_interval", 3)))
+
+    wf = cfg.get("weflow", {})
+    wf["poll_interval"] = max(1, int(wf.get("poll_interval", 3)))
+    wf["mode"] = str(wf.get("mode", "poll")).lower()
+    wf["weflow_enabled"] = bool(wf.get("weflow_enabled", False))
+
     dy = cfg.get("douyin", {})
     dy["enabled"] = bool(dy.get("enabled", True))
-    dy["max_retry"] = _num(dy.get("max_retry"), 3)
-    dy["retry_interval"] = _num(dy.get("retry_interval"), 4)
-    bl = cfg.get("bilibili", {})
-    bl["enabled"] = bool(bl.get("enabled", True))
-    bl["quality"] = _num(bl.get("quality"), 64)
-    bl["timeout"] = _num(bl.get("timeout"), 600)
-    bl["max_retry"] = _num(bl.get("max_retry"), 2)
-    xh = cfg.get("xhs", {})
-    xh["enabled"] = bool(xh.get("enabled", True))
-    xh["timeout"] = _num(xh.get("timeout"), 10)
-    xh["max_retry"] = _num(xh.get("max_retry"), 3)
+    dy["max_video_mb"] = int(dy.get("max_video_mb", 100))
+    dy["timeout"] = int(dy.get("timeout", 60))
+    dy["max_retry"] = int(dy.get("max_retry", 3))
+
+    bili = cfg.get("bilibili", {})
+    bili["enabled"] = bool(bili.get("enabled", True))
+    bili["timeout"] = int(bili.get("timeout", 180))
+    bili["max_retry"] = int(bili.get("max_retry", 3))
+
+    xhs = cfg.get("xhs", {})
+    xhs["enabled"] = bool(xhs.get("enabled", True))
+    xhs["max_video_mb"] = int(xhs.get("max_video_mb", 100))
+    xhs["timeout"] = int(xhs.get("timeout", 60))
+    xhs["max_retry"] = int(xhs.get("max_retry", 3))
+
     wc = cfg.get("wechat", {})
-    wc["test_mode"] = bool(wc.get("test_mode"))
-    wc["delete_after_seconds"] = _num(wc.get("delete_after_seconds"), 180)
+    wc["test_mode"] = bool(wc.get("test_mode", False))
+    wc["enable_friends"] = bool(wc.get("enable_friends", False))
+    wc["file_transfer_fallback"] = bool(wc.get("file_transfer_fallback", False))
+    wc["delete_after_send"] = bool(wc.get("delete_after_send", True))
+    wc["delete_delay"] = max(0, int(wc.get("delete_delay", 180)))
+    wc["send_delay"] = max(0.0, float(wc.get("send_delay", 1.0)))
+    wc["quote_timeout"] = max(10, int(wc.get("quote_timeout", 300)))
     wc["quote_reply"] = bool(wc.get("quote_reply", True))
     if not isinstance(wc.get("group_whitelist"), list):
         wc["group_whitelist"] = []
-    ne = cfg.get("netease", {})
-    ne["enabled"] = bool(ne.get("enabled", True))
-    ne["source"] = str(ne.get("source", "auto")).strip() or "auto"
-    ne["quality"] = str(ne.get("quality", "exhigh")).strip() or "exhigh"
-    ne["api_base"] = str(ne.get("api_base", "https://nextmusic.toubiec.cn")).strip() or "https://nextmusic.toubiec.cn"
-    qq = cfg.get("qqmusic", {})
-    qq["enabled"] = bool(qq.get("enabled", True))
 
 
 def mask_secret(value):
-    """脱敏：非空字符串返回 MASK，空返回空。"""
-    if value is None:
+    """前端安全脱敏：保留前 3 后 3，中间打码。空或极短串直接返回掩码。"""
+    if not value:
         return ""
-    return MASK if str(value).strip() else ""
+    s = str(value)
+    if len(s) <= 6:
+        return "******"
+    return f"{s[:3]}****{s[-3:]}"
 
 
-def masked_config():
-    """返回脱敏后的配置副本（用于 GET /api/config），并附带敏感字段"是否已配置"标记。"""
-    cfg = copy.deepcopy(get_config())
-    token = cfg.get("weflow", {}).get("token", "")
-    cfg["weflow"]["token"] = mask_secret(token)
-    cfg["_meta"] = {
-        "token_set": bool(str(token).strip()),
-        "config_file": CONFIG_FILE,
-    }
+def public_config():
+    """
+    返回供 Web 前端展示的配置字典（敏感字段脱敏）。
+    """
+    cfg = json.loads(json.dumps(get_config()))
+    # 对 Token 脱敏（若用户未修改则保存时保持原值）
+    wf = cfg.get("weflow", {})
+    if wf.get("token"):
+        wf["token_masked"] = mask_secret(wf["token"])
+        wf["has_token"] = bool(wf["token"])
     return cfg
 
 
 def raw_secrets():
-    """返回真实敏感值（仅供本地前端"显示"按钮调用，服务仅监听 127.0.0.1）。"""
+    """读取未脱敏的敏感字段映射，供保存时比对还原。"""
     cfg = get_config()
     return {
         "token": cfg.get("weflow", {}).get("token", ""),
     }
-

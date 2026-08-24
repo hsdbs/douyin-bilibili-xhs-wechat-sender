@@ -44,62 +44,6 @@ def open_browser(port):
         return False
 
 
-def _detect_system_proxy():
-    """检测系统代理（环境变量优先，Windows 注册表兜底）。"""
-    p = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-         or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"))
-    if p:
-        return p
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as key:
-            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
-            if enabled:
-                server, _ = winreg.QueryValueEx(key, "ProxyServer")
-                if server:
-                    # 处理可能形如 http=127.0.0.1:7890;https=127.0.0.1:7890 的复合格式
-                    if "=" in server:
-                        for item in server.split(";"):
-                            if item.startswith("http=") or item.startswith("https="):
-                                s = item.split("=", 1)[1]
-                                return s if "://" in s else "http://" + s
-                    return server if "://" in server else "http://" + server
-    except Exception:
-        pass
-    return None
-
-
-def _disable_system_proxy():
-    """强制所有出网请求国内直连、不走系统代理。
-
-    本机若配置了 HTTP(S)_PROXY（如 Clash 127.0.0.1:7892），会把 api.bilibili.com 等国内
-    API/CDN 路由到失效上游，导致 TLS 握手超时、解析失败。清掉代理变量后，httpx / requests /
-    urllib / yt_dlp 以及 yutto、小红书子进程（均继承本进程环境）一律直连。
-    """
-    proxy_vars = {
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY",
-        "http_proxy", "https_proxy", "all_proxy", "ftp_proxy",
-    }
-    # 先保存原始代理，供需要走代理的境外站点（如维基文库 zh.wikisource.org）使用：
-    # 本机清掉代理后一律国内直连，但维基文库是 .org 境外站，只有经 Clash 等代理才连得上，
-    # 故在此把原始代理（环境变量优先，Windows 注册表兜底）暂存到独立变量，wikisource_parser 会读取它强制走代理。
-    _orig = _detect_system_proxy()
-    if _orig:
-        os.environ["WORKBUDDY_ORIGINAL_HTTPS_PROXY"] = _orig
-        os.environ["WORKBUDDY_ORIGINAL_HTTP_PROXY"] = _orig
-    # 按实际存储键删除（Windows 上 os.environ 键大小写会归一化，需遍历真实键名）
-    removed = []
-    for k in list(os.environ.keys()):
-        if k.upper() in proxy_vars:
-            del os.environ[k]
-            removed.append(k)
-    # 兜底：明确声明所有地址直连（个别库会读 no_proxy）
-    os.environ["NO_PROXY"] = "*"
-    os.environ["no_proxy"] = "*"
-    if removed:
-        logger.info("已关闭系统代理（强制国内直连），清除变量: " + ", ".join(removed))
-
-
 def bind_server(port):
     """尝试绑定端口，被占用则自动递增找可用端口。返回 (httpd, actual_port)。"""
     from web.server import create_server
@@ -142,10 +86,6 @@ def main():
         _show_error(APP_NAME, f"配置文件读取失败：\n{e}")
         sys.exit(1)
     port = int(cfg.get("advanced", {}).get("port", 8765))
-
-    # 强制国内直连、不走系统代理（避免 Clash 等把国内 API 路由到失效上游导致解析超时）
-    if cfg.get("advanced", {}).get("bypass_system_proxy", True):
-        _disable_system_proxy()
 
     # 单实例检测
     if _probe_self(port):
