@@ -25,6 +25,9 @@ data/
 # ===== 下载的视频（运行时产出） =====
 videos/
 
+# ===== 音乐解析缓存（musicdl 运行时产出） =====
+musicdl_outputs/
+
 # ===== 敏感信息 / Cookie / 含真实 Token 的本地配置 =====
 douyin_cookie.txt
 config/config.json
@@ -44,6 +47,12 @@ uvbin/
 @AutomationLog.txt
 发送测试_请忽略.txt
 测试视频_请忽略.mp4
+_tmp_accept/
+_tmp_accept.log
+
+# ===== 临时诊断脚本（代理调试，非项目代码） =====
+_diag_proxy2.py
+_probe_proxy.py
 
 # ===== 编辑器 / 系统文件 =====
 .idea/
