@@ -15,6 +15,9 @@ _state = {
     "douyin": {"status": "unknown", "detail": "", "checked_at": 0},
     "bilibili": {"status": "unknown", "detail": "", "checked_at": 0},
     "xhs": {"status": "unknown", "detail": "", "checked_at": 0},
+    "netease": {"status": "unknown", "detail": "", "checked_at": 0},
+    "qqmusic": {"status": "unknown", "detail": "", "checked_at": 0},
+    "ebook": {"status": "unknown", "detail": "", "checked_at": 0},
     "service": {
         "running": False,
         "started_at": None,      # 启动时间戳
@@ -72,6 +75,9 @@ def snapshot():
         "douyin": dict(_state["douyin"]),
         "bilibili": dict(_state["bilibili"]),
         "xhs": dict(_state["xhs"]),
+        "netease": dict(_state["netease"]),
+        "qqmusic": dict(_state["qqmusic"]),
+        "ebook": dict(_state.get("ebook", {"status": "unknown", "detail": "", "checked_at": 0})),
         "service": svc,
         "server_time": time.time(),
     }

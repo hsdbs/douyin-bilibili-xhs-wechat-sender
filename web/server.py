@@ -198,6 +198,9 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif path == "/api/env/check":
             _ok(self, _env_check())
+        elif path == "/api/fs/list":
+            target_path = qs.get("path", "")
+            _ok(self, _list_filesystem(target_path))
         else:
             _err(self, "接口不存在: " + path, code=404)
 
@@ -239,6 +242,24 @@ class Handler(BaseHTTPRequestHandler):
             ok, detail = _safe_test(biz.test_xhs)
             state.set_status("xhs", "ok" if ok else "error", detail)
             _json_response(self, {"ok": ok, "detail": detail, "status": "ok" if ok else "error"})
+        elif path == "/api/netease/test":
+            state.set_status("netease", "checking", "正在测试网易云解析...")
+            import music_parser
+            ok, detail = _safe_test(music_parser.test_netease_api)
+            state.set_status("netease", "ok" if ok else "error", detail)
+            _json_response(self, {"ok": ok, "detail": detail, "status": "ok" if ok else "error"})
+        elif path == "/api/qqmusic/test":
+            state.set_status("qqmusic", "checking", "正在测试 QQ音乐解析...")
+            import music_parser
+            ok, detail = _safe_test(music_parser.test_music_env)
+            state.set_status("qqmusic", "ok" if ok else "error", detail)
+            _json_response(self, {"ok": ok, "detail": detail, "status": "ok" if ok else "error"})
+        elif path in ("/api/ebook/test", "/api/novel/test", "/api/book/test"):
+            state.set_status("ebook", "checking", "正在测试电子书检索下载引擎...")
+            import novel_parser
+            ok, detail = _safe_test(novel_parser.test_novel)
+            state.set_status("ebook", "ok" if ok else "error", detail)
+            _json_response(self, {"ok": ok, "detail": detail, "status": "ok" if ok else "error"})
         elif path == "/api/wechat/test":
             state.set_status("wechat", "checking", "正在测试微信连接...")
             ok, detail = _safe_test(biz.test_wechat)
@@ -267,6 +288,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/select-folder":
             folder = _select_folder()
             _ok(self, {"folder": folder})
+        elif path == "/api/fs/mkdir":
+            data = _read_json_body(self)
+            parent = data.get("parent_path", "")
+            name = data.get("name", "")
+            ok, res = _create_folder(parent, name)
+            if ok:
+                _ok(self, {"folder": res})
+            else:
+                _err(self, res)
         else:
             _err(self, "接口不存在: " + path, code=404)
 
@@ -281,26 +311,55 @@ def _safe_test(fn):
 
 
 def _select_folder():
-    """用 Windows 原生文件夹选择对话框选目录，返回所选路径（取消返回空字符串）。"""
-    import base64
+    """打开原生系统文件夹选择对话框，强制置顶显示，返回所选路径（取消或失败返回空字符串）。"""
     import subprocess
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms\n"
-        "$f = New-Object System.Windows.Forms.FolderBrowserDialog\n"
-        "$f.Description = 'Select folder'\n"
-        "$f.ShowNewFolderButton = $true\n"
-        "$r = $f.ShowDialog()\n"
-        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($f.SelectedPath) }\n"
-    )
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    import sys
+
+    # 方案 1：使用 Python 自带的 tkinter filedialog（原生 Windows 对话框，强制置顶）
     try:
+        py_script = (
+            "import tkinter as tk, tkinter.filedialog as fd, sys, os\n"
+            "r = tk.Tk()\n"
+            "r.withdraw()\n"
+            "r.attributes('-topmost', True)\n"
+            "folder = fd.askdirectory(parent=r, title='请选择存储目录')\n"
+            "r.destroy()\n"
+            "if folder:\n"
+            "    sys.stdout.write(os.path.normpath(folder))\n"
+        )
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-STA", "-EncodedCommand", encoded],
-            capture_output=True, timeout=180,
+            [sys.executable, "-c", py_script],
+            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="ignore"
+        )
+        folder = (r.stdout or "").strip()
+        if folder:
+            return folder
+    except Exception as e:
+        logger.warning(f"[目录选择器] tkinter 方案异常，转入 PowerShell 方案: {e}")
+
+    # 方案 2：PowerShell 强制 TopMost 弹窗方案
+    try:
+        ps_cmd = (
+            "Add-Type -AssemblyName System.Windows.Forms\n"
+            "$form = New-Object System.Windows.Forms.Form\n"
+            "$form.TopMost = $true\n"
+            "$form.Opacity = 0\n"
+            "$form.Show()\n"
+            "$form.Visible = $false\n"
+            "$f = New-Object System.Windows.Forms.FolderBrowserDialog\n"
+            "$f.Description = '请选择存储目录'\n"
+            "$f.ShowNewFolderButton = $true\n"
+            "$r = $f.ShowDialog($form)\n"
+            "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($f.SelectedPath) }\n"
+            "$form.Dispose()\n"
+        )
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-STA", "-Command", ps_cmd],
+            capture_output=True, timeout=120,
         )
         raw = r.stdout
         text = ""
-        for enc in ("utf-8", "gbk", "mbcs"):
+        for enc in ("utf-8", "gbk", "mbcs", "cp936"):
             try:
                 text = raw.decode(enc)
                 break
@@ -308,8 +367,91 @@ def _select_folder():
                 continue
         return text.strip()
     except Exception as e:
-        logger.error(f"[目录] 打开目录选择失败: {e}")
+        logger.error(f"[目录选择器] 打开目录选择失败: {e}")
         return ""
+
+
+def _list_filesystem(target_path=None):
+    """列出系统驱动器或指定路径下的子目录列表（用于内置可视化目录树选择器）。"""
+    import os
+    import string
+
+    # 获取可用驱动器列表（Windows）
+    drives = []
+    if os.name == "nt":
+        try:
+            import ctypes
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            for letter in string.ascii_uppercase:
+                if bitmask & 1:
+                    drive_path = f"{letter}:\\"
+                    drives.append({"name": f"{letter}: 盘", "path": drive_path})
+                bitmask >>= 1
+        except Exception:
+            for letter in ("C", "D", "E", "F"):
+                p = f"{letter}:\\"
+                if os.path.exists(p):
+                    drives.append({"name": f"{letter}: 盘", "path": p})
+    else:
+        drives.append({"name": "根目录 /", "path": "/"})
+
+    # 当前项目根目录
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 如果未指定 path 或路径不存在，默认使用项目目录
+    if not target_path or not os.path.exists(target_path):
+        target_path = project_dir
+
+    target_path = os.path.normpath(target_path)
+
+    # 计算父级目录
+    parent_path = os.path.dirname(target_path)
+    if parent_path == target_path:
+        parent_path = None
+
+    items = []
+    try:
+        with os.scandir(target_path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        name = entry.name
+                        # 过滤隐藏系统目录
+                        if name.startswith(".") or name.startswith("$") or name in ("System Volume Information", "Recovery", "$RECYCLE.BIN"):
+                            continue
+                        items.append({
+                            "name": name,
+                            "path": os.path.normpath(entry.path),
+                        })
+                except (PermissionError, OSError):
+                    continue
+        items.sort(key=lambda x: x["name"].lower())
+    except (PermissionError, OSError) as e:
+        logger.warning(f"[文件系统] 访问目录受限 {target_path}: {e}")
+
+    return {
+        "current_path": target_path,
+        "parent_path": parent_path,
+        "drives": drives,
+        "folders": items,
+        "project_dir": project_dir
+    }
+
+
+def _create_folder(parent_path, name):
+    """在指定目录下创建新子文件夹。"""
+    import os
+    if not parent_path or not os.path.exists(parent_path):
+        return False, "父级目录不存在"
+    name = (name or "").strip()
+    if not name or any(c in name for c in r'\/:*?"<>|'):
+        return False, "文件夹名称为空或包含非法字符"
+    new_dir = os.path.normpath(os.path.join(parent_path, name))
+    try:
+        os.makedirs(new_dir, exist_ok=True)
+        return True, new_dir
+    except Exception as e:
+        return False, f"创建文件夹失败: {e}"
 
 
 def _env_check():
@@ -344,6 +486,16 @@ def _env_check():
     # 小红书解析（XHS-Downloader）
     ok, detail = biz.test_xhs()
     result.append({"name": "小红书解析", "status": "ok" if ok else "error", "detail": detail})
+
+    # 音乐解析（yt-dlp + FFmpeg，网易云 / QQ音乐共用）
+    import music_parser
+    ok, detail = music_parser.test_music_env()
+    result.append({"name": "音乐解析(网易云/QQ)", "status": "ok" if ok else "error", "detail": detail})
+
+    # 电子书引擎（小说 / 出版名著高速检索下载）
+    import novel_parser
+    ok, detail = novel_parser.test_novel()
+    result.append({"name": "电子书检索下载", "status": "ok" if ok else "error", "detail": detail})
 
     return {"items": result}
 
