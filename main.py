@@ -83,14 +83,63 @@ XHS_URL_RE = re.compile(
     r"https?://xhslink\.(?:com|cn)/[A-Za-z0-9/]+"
 )
 
+# 网易云音乐链接正则（PC 长链 + m 站移动端短链 y.music.163.com + 163cn.tv 短链）
+# 注：微信分享卡片里的网易云链接多为 y.music.163.com/m/song?id=xxxx 形态
+NETEASE_URL_RE = re.compile(
+    r"https?://(?:"
+    r"music\.163\.com/(?:#/)?(?:song|album|playlist|artist|dj)[^\s'\"<>]*|"
+    r"y\.music\.163\.com/[^\s'\"<>]+|"
+    r"163cn\.tv/[A-Za-z0-9]+/?)"
+)
+
+# QQ 音乐链接正则（y.qq.com 长链 + c.y.qq.com / c6.y.qq.com 短链）
+QQMUSIC_URL_RE = re.compile(
+    r"https?://(?:y\.qq\.com/[^\s'\"<>]+|"
+    r"c(?:6)?\.y\.qq\.com/[^\s'\"<>]+)"
+)
+
 # 平台 → 链接正则（按顺序匹配，命中第一个即归属该平台）
 PLATFORM_URL_RES = [
     ("douyin", DOUYIN_URL_RE),
     ("bilibili", BILIBILI_URL_RE),
     ("xhs", XHS_URL_RE),
+    ("netease", NETEASE_URL_RE),
+    ("qqmusic", QQMUSIC_URL_RE),
 ]
 
-PLATFORM_NAMES = {"douyin": "抖音", "bilibili": "B站", "xhs": "小红书"}
+# 命令正则：./下载 书名（维基文库公有资源下载，兼容中英文标点、书名号与多余空格）
+COMMAND_RE = re.compile(r"^[.·。/、\s]*下载\s*[：:]?\s*《?([^》\r\n]+)》?\s*$", re.IGNORECASE)
+
+PLATFORM_NAMES = {"douyin": "抖音", "bilibili": "B站", "xhs": "小红书",
+                  "netease": "网易云音乐", "qqmusic": "QQ音乐",
+                  "wikisource": "电子书", "novel": "电子书", "ebook": "电子书"}
+
+
+def _match_book_command(content):
+    """严格按照 Web 配置中用户设定的触发指令前缀匹配电子书下载请求。"""
+    try:
+        cfg = get_config()
+        ebook_cfg = cfg.get("ebook", {})
+        if not ebook_cfg.get("enabled", True):
+            return None
+
+        # 严格读取用户在 Web 界面设定的指令前缀（若空则默认 ./下载）
+        prefix = (ebook_cfg.get("command_prefix") or "./下载").strip()
+        if not prefix:
+            return None
+
+        raw = (content or "").strip()
+
+        # 严格匹配以用户自定义 prefix 开头的消息，后接可选的空格/冒号以及书名
+        pattern = r"^\s*" + re.escape(prefix) + r"\s*[：:]?\s*《?([^》\r\n]+)》?\s*$"
+        m = re.search(pattern, raw, re.IGNORECASE)
+        if m:
+            title = m.group(1).strip().strip("《》").strip()
+            if title:
+                return title
+    except Exception as e:
+        logger.error(f"[电子书指令] 匹配异常: {e}")
+    return None
 
 
 def detect_card(content):
@@ -101,12 +150,13 @@ def detect_card(content):
       - 是卡片但 <url> 域名不属于已知平台 -> None（暂不处理其它来源卡片）
       - 是已知平台卡片 -> 返回完整反转义链接（保留解析必需参数）+ 标题 + 平台
 
-    覆盖平台：小红书（xiaohongshu/rednote/xhslink）、B站（bilibili/b23.tv）。
+    覆盖平台：小红书（xiaohongshu/rednote/xhslink）、B站（bilibili/b23.tv）、
+    网易云音乐（music.163.com / y.music.163.com / 163cn.tv）、QQ音乐（y.qq.com / c.y.qq.com）。
     背景：微信里分享卡片是结构化消息，真实链接在 <appmsg><url> 字段中，且 XML 对 &
     做转义（&amp;）。现有纯文本正则会因参数中的 '.' 之类字符截断、丢失关键参数，因此卡片
     单独走此分支——直接从 XML <url> 取完整链接并用 html.unescape 反转义，不去碰既有正则。
-    title 取自 <title>，用于发送时引用原卡片：wxauto4 GetAllMessage 返回的卡片
-    content 是渲染后的标题文本（type='link'，不含 URL），必须用标题匹配才能引用。
+    title 取自 <title>（音乐卡片里是歌名），singer 取自 <des>（音乐卡片里是歌手）；
+    二者用于发送时引用原卡片，以及作为「歌名+歌手」搜索下载的候选输入。
     """
     if not content or "<appmsg" not in content or "<url" not in content:
         return None
@@ -122,21 +172,36 @@ def detect_card(content):
     elif (re.search(r"https?://(?:www\.|m\.)?bilibili\.com/", url)
           or re.search(r"https?://b23\.tv/", url)):
         platform = "bilibili"
+    elif re.search(r"https?://(?:music\.163\.com|y\.music\.163\.com|163cn\.tv)/", url):
+        platform = "netease"
+    elif re.search(r"https?://(?:y\.qq\.com|c(?:6)?\.y\.qq\.com)/", url):
+        platform = "qqmusic"
     if not platform:
         return None
 
-    # 卡片标题（用于发送时引用原卡片，content 不含 URL 故只能用标题匹配）
+    # 卡片标题（音乐卡片里是歌名），用于发送时引用原卡片
     title = None
     mt = re.search(r"<title>(.*?)</title>", content, re.DOTALL | re.IGNORECASE)
     if mt:
         title = html.unescape(mt.group(1).strip())
-    return {"url": url, "title": title, "platform": platform}
+    # 卡片歌手（音乐卡片里是 <des> 字段，部分旧版可能用 <description>），
+    # 作为「歌名+歌手」搜索下载的候选输入（URL 解析失败时的兜底）
+    singer = None
+    md = re.search(r"<des>(.*?)</des>", content, re.DOTALL | re.IGNORECASE)
+    if not md:
+        md = re.search(r"<description>(.*?)</description>", content, re.DOTALL | re.IGNORECASE)
+    if md:
+        singer = html.unescape(md.group(1).strip())
+    return {"url": url, "title": title, "singer": singer, "platform": platform}
 
 
 def _platform_enabled(platform):
     """读取某平台 enabled 开关（默认 True）。"""
     try:
-        return bool(get_config().get(platform, {}).get("enabled", True))
+        cfg = get_config()
+        if platform in ("wikisource", "novel", "ebook"):
+            return bool(cfg.get("ebook", {}).get("enabled", True))
+        return bool(cfg.get(platform, {}).get("enabled", True))
     except Exception:
         return True
 
@@ -262,6 +327,11 @@ def _process_link(target, display_name, url, platform, rawid, processed, quote_k
     if not _mark_processed(processed, rawid):
         return
 
+    # ./下载 命令分支（维基文库公有资源）：url 此处承载书名文本
+    if platform == "wikisource":
+        _process_command(target, display_name, url, rawid, processed, quote_key)
+        return
+
     pname = PLATFORM_NAMES.get(platform, platform)
     task = tasks.add_task(display_name, url, status="processing")
     logger.info(f"[命中] {display_name}({target}) 发来{pname}链接: {url}")
@@ -283,7 +353,12 @@ def _process_link(target, display_name, url, platform, rawid, processed, quote_k
     if sent:
         for p in file_paths:
             schedule_delete(p)
-        label = "图文" if kind == "note" else "视频"
+        if kind == "note":
+            label = "图文"
+        elif kind == "audio":
+            label = "音频"
+        else:
+            label = "视频"
         tasks.update_task(task["id"], status="success",
                           video=f"[{pname}] {label} {len(file_paths)} 个文件")
     else:
@@ -374,6 +449,12 @@ def _handle_push_event(data, processed):
         _enqueue_link(target, display_name, card["url"], card["platform"], rawid, card.get("title"))
         return
 
+    # 命令：电子书下载（支持自定义前缀或默认 ./下载 书名）
+    book_title = _match_book_command(content)
+    if book_title:
+        _enqueue_link(target, display_name, book_title, "wikisource", rawid)
+        return
+
     for platform, regex in PLATFORM_URL_RES:
         m = regex.search(content)
         if m:
@@ -427,6 +508,11 @@ def _scan_messages(processed, label="扫描"):
             card = detect_card(content)
             if card:
                 found.append((target, display_name, card["url"], card["platform"], key, card.get("title")))
+                continue
+            # 命令：电子书下载（支持自定义前缀或默认 ./下载 书名）
+            book_title = _match_book_command(content)
+            if book_title:
+                found.append((target, display_name, book_title, "wikisource", key, None))
                 continue
             for platform, regex in PLATFORM_URL_RES:
                 m = regex.search(content)
@@ -539,30 +625,66 @@ def resolve_link(url, platform):
     if platform == "xhs":
         import xhs_parser
         return xhs_parser.resolve_xhs(url)
+    if platform == "netease":
+        import music_parser
+        return music_parser.resolve_music(url, "netease")
+    if platform == "qqmusic":
+        import music_parser
+        return music_parser.resolve_music(url, "qqmusic")
     raise RuntimeError(f"未知平台: {platform}")
 
 
 # ============ 4. 发送视频（发对人是红线）============
+def _attach_desktop():
+    """在后台/服务环境下确保附加到当前活动用户的交互桌面 (WinSta0\\Default)。"""
+    try:
+        import win32service, win32con
+        hwinsta = win32service.OpenWindowStation('WinSta0', False, win32con.MAXIMUM_ALLOWED)
+        hwinsta.SetProcessWindowStation()
+        hdesk = win32service.OpenDesktop('Default', 0, False, win32con.MAXIMUM_ALLOWED)
+        hdesk.SetThreadDesktop()
+    except Exception:
+        pass
+
+
 def _find_wechat_hwnd():
     """找到微信主窗口句柄（Qt51514QWindowIcon，优先标题含「微信」）。"""
+    _attach_desktop()
     import psutil
-    import win32gui
-    import win32process
     pids = {p.info['pid'] for p in psutil.process_iter(['pid', 'name'])
             if p.info['name'] == 'Weixin.exe'}
+    if not pids:
+        return None
+
     targets = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
 
     def cb(hwnd, _):
-        if win32gui.GetClassName(hwnd) == 'Qt51514QWindowIcon':
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            if pid in pids:
-                targets.append(hwnd)
+        try:
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in pids:
+                buf_cls = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetClassNameW(hwnd, buf_cls, 256)
+                cls = buf_cls.value
+                if cls == 'Qt51514QWindowIcon' or 'Qt' in cls or cls == 'WeChatMainWndForPC':
+                    buf_title = ctypes.create_unicode_buffer(256)
+                    ctypes.windll.user32.GetWindowTextW(hwnd, buf_title, 256)
+                    title = buf_title.value
+                    targets.append((hwnd, cls, title))
+        except Exception:
+            pass
+        return True
 
-    win32gui.EnumWindows(cb, None)
-    for h in targets:
-        if '微信' in win32gui.GetWindowText(h):
+    try:
+        ctypes.windll.user32.EnumWindows(WNDENUMPROC(cb), 0)
+    except Exception:
+        pass
+
+    for h, cls, title in targets:
+        if '微信' in title:
             return h
-    return targets[0] if targets else None
+    return targets[0][0] if targets else None
 
 
 def _maximize_wechat():
@@ -760,6 +882,66 @@ def send_files(display_name, file_paths, target_wxid, quote_url=None, quote_key=
 
     _minimize_wechat()
     return True
+
+
+# ============ ./下载 命令处理（维基文库公有资源）============
+def send_text(display_name, text, target_wxid):
+    """发送纯文本消息（./下载 未命中时回复提示）。"""
+    _maximize_wechat()
+    wx = _get_wechat()
+    ok = switch_chat(wx, display_name)
+    if not ok:
+        _reset_wechat()
+        wx = _get_wechat()
+        ok = switch_chat(wx, display_name)
+    if not ok:
+        logger.warning(f"[发送] 无法切换到 {display_name!r}，已中止文本发送（避免发错人）")
+        return False
+    try:
+        wx.SendMsg(text)
+        logger.info(f"[发送] 已发送文本 -> {display_name} (wxid={target_wxid}): {text[:30]}")
+    except Exception as e:
+        logger.warning(f"[发送] 文本发送失败: {e}")
+        return False
+    finally:
+        _minimize_wechat()
+    return True
+
+
+def _process_command(target, display_name, title, rawid, processed, quote_key=None):
+    """处理电子书下载命令（中文电子书与网络文学极速全本检索下载）。"""
+    import novel_parser
+    task = tasks.add_task(display_name, f"电子书: 《{title}》", status="processing")
+    logger.info(f"[电子书] {display_name}({target}) 请求下载: 《{title}》")
+
+    if not _platform_enabled("ebook"):
+        logger.info(f"[跳过] 电子书下载功能已关闭，忽略《{title}》")
+        tasks.update_task(task["id"], status="failed", error="电子书下载功能已关闭")
+        return
+
+    cfg = get_config()
+    dl_dir = (cfg.get("ebook", {}) or {}).get("download_dir") or DOWNLOAD_DIR
+    try:
+        kind, file_paths = novel_parser.resolve_book(title, dl_dir)
+    except novel_parser.BookNotFound as e:
+        logger.info(f"[电子书] 未找到「{title}」: {e}")
+        send_text(display_name, f"未找到《{title}》相关电子书资源", target)
+        tasks.update_task(task["id"], status="success", video="未找到（已回复提示）")
+        return
+    except Exception as e:
+        logger.error(f"[电子书] 处理「{title}」异常: {e}")
+        send_text(display_name, f"未找到《{title}》相关电子书资源", target)
+        tasks.update_task(task["id"], status="failed", error=str(e)[:200])
+        return
+
+    sent = send_files(display_name, file_paths, target, None, quote_key)
+    if sent:
+        for p in file_paths:
+            schedule_delete(p)  # 复用延迟删除（默认 180s）
+        tasks.update_task(task["id"], status="success",
+                          video=f"[电子书] 《{title}》全本")
+    else:
+        tasks.update_task(task["id"], status="failed", error="发送失败")
 
 
 # ============ 5. 发送后延迟清理（非阻塞，线程安全）============
@@ -1016,3 +1198,6 @@ if __name__ == "__main__":
         run_worker(None)
     except KeyboardInterrupt:
         logger.info("\n[退出] 已停止")
+
+
+

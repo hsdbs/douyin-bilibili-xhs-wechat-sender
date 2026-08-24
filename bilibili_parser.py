@@ -75,6 +75,14 @@ def _auth():
     return (_cfg("auth") or "").strip()
 
 
+def _proxy():
+    """yutto 代理策略：默认 'no'（直连，避免系统代理把 api.bilibili.com 路由到失效上游导致握手超时）。
+    可选值：'no'=不走代理 / 'auto'=系统代理 / 具体代理地址。
+    实测本机系统代理(127.0.0.1:7892)会导致 api.bilibili.com TLS 握手超时，故默认关闭。"""
+    p = (_cfg("proxy") or "").strip()
+    return p or "no"
+
+
 def _yutto_bin():
     """探测 yutto 可执行文件路径。配置优先 → PATH → 常见安装位置。"""
     configured = _cfg("yutto_path") or ""
@@ -136,6 +144,9 @@ def _run_yutto(url, tmpdir):
     auth = _auth()
     if auth:
         cmd += ["--auth", auth]
+
+    # 代理策略：默认关闭系统代理（避免 api.bilibili.com 握手超时）
+    cmd += ["--proxy", _proxy()]
 
     kwargs = dict(
         capture_output=True,

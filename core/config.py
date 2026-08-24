@@ -75,6 +75,26 @@ def _default_config():
             "timeout": 10,
             "max_retry": 3,
         },
+        "netease": {
+            "enabled": True,                # 平台开关（关闭后不识别网易云链接）
+            "download_dir": VIDEO_DIR,
+            "cookie": "",                   # 网易云网页版 Cookie（可选，VIP/付费歌曲需）
+            "source": "auto",               # 解析源: auto=API优先+yt-dlp兜底 | api=仅API | ytdlp=仅yt-dlp
+            "quality": "exhigh",            # API 音质: standard/higher/exhigh/lossless/hires/sky...
+            "api_base": "https://nextmusic.toubiec.cn",  # NetEase 解析 API 地址（可自托管）
+        },
+        "qqmusic": {
+            "enabled": True,                # 平台开关（关闭后不识别QQ音乐链接）
+            "download_dir": VIDEO_DIR,
+            "cookie": "",                   # QQ音乐网页版 Cookie（可选，多数歌曲需登录才能下）
+        },
+        "ebook": {
+            "enabled": True,                # 平台开关（关闭后不识别电子书下载指令）
+            "download_dir": VIDEO_DIR,      # 电子书下载目录
+            "command_prefix": "./下载",     # 触发指令前缀（默认 "./下载"，支持自定义如 "下载"、"#下载" 等）
+            "search_source": "auto",        # 检索源: auto=智能优选 | ixdzs=爱下电子书
+            "auto_convert_txt": True,       # 自动解压并转换为标准 UTF-8 .txt 电子书
+        },
         "wechat": {
             "group_whitelist": [],          # 默认空：首次运行不向任何群发送，需在 Web 面板配置
             "test_mode": False,             # True=所有发送发到文件传输助手
@@ -247,6 +267,13 @@ def _coerce_types(cfg):
     wc["quote_reply"] = bool(wc.get("quote_reply", True))
     if not isinstance(wc.get("group_whitelist"), list):
         wc["group_whitelist"] = []
+    ne = cfg.get("netease", {})
+    ne["enabled"] = bool(ne.get("enabled", True))
+    ne["source"] = str(ne.get("source", "auto")).strip() or "auto"
+    ne["quality"] = str(ne.get("quality", "exhigh")).strip() or "exhigh"
+    ne["api_base"] = str(ne.get("api_base", "https://nextmusic.toubiec.cn")).strip() or "https://nextmusic.toubiec.cn"
+    qq = cfg.get("qqmusic", {})
+    qq["enabled"] = bool(qq.get("enabled", True))
 
 
 def mask_secret(value):
@@ -274,3 +301,4 @@ def raw_secrets():
     return {
         "token": cfg.get("weflow", {}).get("token", ""),
     }
+
