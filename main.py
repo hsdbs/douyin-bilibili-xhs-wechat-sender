@@ -1058,7 +1058,10 @@ def test_wechat():
         hwnd = _find_wechat_hwnd()
         if not hwnd:
             return False, "微信未运行：未找到微信主窗口，请先启动并登录微信"
-        from wxauto4 import WeChat
+        try:
+            from wxauto4 import WeChat
+        except ImportError:
+            return False, "缺少 wxauto4 依赖（wxauto4 仅适配 Python 3.9-3.12，请使用项目自带的 .venv 环境或双击「启动自动发送.cmd」）"
         WeChat(ads=False, resize=False)
         _minimize_wechat()   # 测试完成后最小化微信窗口，避免停留在桌面
         return True, "微信已连接"

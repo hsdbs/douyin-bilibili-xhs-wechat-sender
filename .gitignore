@@ -63,3 +63,7 @@ Thumbs.db
 
 # ===== 第三方工具自带的仓库元数据（嵌套 .git） =====
 tools/xhs/.git/
+
+# ===== 本地浏览器扩展等非项目文件 =====
+github-chinese-chrome-extension/
+

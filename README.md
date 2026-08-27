@@ -131,3 +131,22 @@ pyinstaller douyin_sender.spec --noconfirm --clean
 2. **凭据脱敏**：WeFlow Token、第三方 Cookie 等敏感配置在 API 返回及前端展示时均经过脱敏保护，日志中自动屏蔽敏感字符。
 3. **隔离安全**：用户的真实凭证与运行时数据（`config/config.json`、`douyin_cookie.txt`、`data/`、`logs/` 等）均已加入 `.gitignore`，不会提交至公开代码仓库。
 
+---
+
+## 🙏 鸣谢与致谢 (Acknowledgments)
+
+本项目的发展与实现离不开以下优秀的开源项目与社区贡献者的支持，特此致以诚挚的谢意：
+
+| 项目 / 工具 | 仓库 / 官网 | 作用与贡献 |
+|:---|:---|:---|
+| **WeFlow** | [weflow-org/weflow](https://github.com/weflow-org/weflow) | 提供稳定高效的微信消息监听与实时 SSE 推送中枢 |
+| **wxauto** | [cluic/wxauto](https://github.com/cluic/wxauto) | 提供强大的 Windows 微信 UI 自动化控制与多类型消息/文件发送能力 |
+| **f2** | [Johnserf-Seed/f2](https://github.com/Johnserf-Seed/f2) | 提供抖音无水印视频与图集数据解析及游客态凭据支持 |
+| **yutto** | [yutto-dev/yutto](https://github.com/yutto-dev/yutto) | 提供高效优美的哔哩哔哩 (Bilibili) 视频与音频流抓取引擎 |
+| **FFmpeg** | [FFmpeg / ffmpeg.org](https://ffmpeg.org/) | 提供音视频混流、重封装与高质量转码支持 |
+| **XHS-Downloader** | [JoeanAmier/XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) | 提供小红书图文笔记与视频的高清无水印提取引擎 |
+| **yt-dlp** | [yt-dlp/yt-dlp](https://github.com/yt-dlp/yt-dlp) | 提供网络多媒体音视频流的兜底下载与格式转换支持 |
+
+感谢所有开源作者与维护者的无私奉献！❤️
+
+

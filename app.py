@@ -18,6 +18,35 @@ import time
 import urllib.request
 import webbrowser
 
+def _bootstrap_venv():
+    """若当前解释器缺少 wxauto4，自动切换到项目 .venv (Python 3.12) 环境执行。"""
+    try:
+        import wxauto4
+        return
+    except ImportError:
+        pass
+
+    cur_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(cur_dir, ".venv", "Scripts", "python.exe"),
+        os.path.join(r"E:\抖音视频解析自动发送", ".venv", "Scripts", "python.exe"),
+    ]
+    for venv_py in candidates:
+        if os.path.isfile(venv_py):
+            cur_exe = os.path.abspath(sys.executable).lower()
+            target_exe = os.path.abspath(venv_py).lower()
+            if cur_exe != target_exe:
+                import subprocess
+                try:
+                    ret = subprocess.run([venv_py, "-c", "import wxauto4"], capture_output=True)
+                    if ret.returncode == 0:
+                        script_path = os.path.abspath(__file__)
+                        cmd = [venv_py, script_path] + sys.argv[1:]
+                        code = subprocess.call(cmd)
+                        sys.exit(code)
+                except Exception:
+                    pass
+
 from core.config import get_config
 from core.logger import logger
 
@@ -199,4 +228,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _bootstrap_venv()
     main()
